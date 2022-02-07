@@ -1,0 +1,2075 @@
+---
+title: "Network visualisation"
+author: "VS"
+date: "1 6 2021"
+output: html_document
+---
+#Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggraph)
+library(igraph)
+library(plyr)
+library(tidyverse)
+library(tidygraph)
+library(network)
+library(ggplot2)
+library(magrittr)
+library(dplyr)
+library(hrbrthemes)
+library(data.table)
+library(rgexf) #to convert igraph to gephi
+library(qwraps2) #summary table
+library(ggsci)
+
+theme_set(theme_ipsum_ps() )
+
+load("data.RData")
+
+```
+
+# Specific functions
+##My edges fast
+```{r}
+
+#identification of edges
+
+my.edges_fast <- function(df, weighted = FALSE, adjacency = FALSE){
+  
+  df %<>% dplyr::select(-any_of(c("severity")))
+  
+  df2 <- data.frame(matrix(0L,ncol = ncol(df), nrow= ncol(df)))
+  colnames(df2) <- colnames(df[1: ncol(df)])
+  rownames(df2) <- colnames(df[1: ncol(df)])
+
+  for (j in 1:nrow(df)){
+    
+    a <- which(df[j,] != 0)
+    
+    a_len = length(a)
+    
+    if (a_len>1){
+      for (k in 1:a_len){
+        for (l in 1:a_len){
+          if (weighted){
+            df2[a[k],a[l]] = df2[a[k],a[l]]+ df[a[k],a[l]]
+          } else {
+            df2[a[k],a[l]] = df2[a[k],a[l]]+1
+            
+          }
+        }
+      }
+    }
+  }
+  
+  if (adjacency){ #to only get adjacency matrix for heatmap
+    edgelist <- as.matrix(df2)
+  } else {
+    
+      g  <- graph.adjacency(as.matrix (df2),weighted=TRUE)
+    edgelist <- get.data.frame(g)
+    edgelist %<>%
+      filter(from != to) %>%
+      mutate(weight = round(weight/nrow(df)*100,2)) #convert to percentage
+
+    }
+
+  return(edgelist)
+  
+}
+
+```
+
+##My nodes
+```{r}
+
+my.nodes <- function(df, add_class=F, add_target=F){
+  
+  df %<>% 
+    dplyr::select(-any_of(c("severity"))) %>%
+    dplyr::summarise(across(everything(), ~sum(.x))) %>% 
+    pivot_longer(cols = everything(), names_to="label", values_to = "weight") %>% 
+    rowid_to_column("id") %>% 
+    mutate(weight = round(weight/nrow(df)*100,2)) 
+
+  if(add_class){
+    df %<>%
+     mutate(drug_class = case_when(label %in% c("beta_blockers", "calcium_channel_blockers", "antihypertensives", "cardiac_therapy") ~ "Cardiovascular",
+                                    label %in% c("vit_k_antagonists", "heparin", 
+                                               "direct_thrombin_inhibitors","direct_xa_inhibitors",
+                                               "anticoagulants_other") ~ "Anti-coagulants",
+                                    label %in% c("platelet_inhibitors", "aspirin") ~ "Antiplatelet agents",
+                                    label %in% c("ace_inhibitors","sartans","renin_inhibitors") ~ "RAAS",
+                                    label %in% c ("thiazids","low_ceiling_diuretics","potassium_spare_diuretics",
+                                                "loop_diuretics") ~ "Diuretics", 
+                                    label %in% c("insulins") ~ "Insulins",
+                                    label %in% c("biguanides", "sulfonylureas", "alpha_glucosidase_inhibitors", "thiazolidinediones",
+                                               "dipeptidyl_peptidase4_inhibitors", "glucagon_like_peptide1_analogues",
+                                               "sodium_glucose_co_transporter2_inhibitors", 
+                                               "other_blood_glucose_lowering_drugs") ~ "Anti-hyperglycaemics",
+                                    label %in% c("corticosteroids_systemic", "corticosteroids_inhalative") ~ "Corticosteroids",
+                                    label %in% c( "nsaid", "other_analgesics", "opioids", "migraine_drugs") ~ "Analgesics",
+                                    label %in% c ("antibiotics", "antifungals", "antivirals") ~ "Anti-Infectives",
+                                    label %in% c ("immunosuppressants") ~ "Immunosuppressants",
+                                    label %in% c ("statins") ~ "Statins",
+                                    label %in% c ("immunglobolins") ~ "Immunglobolins",
+                                    label %in% c ("zinc","melatonin", "vit_a","vit_b","vit_c","vit_d") ~ "Supplements",
+                                    label %in% c ("ppis", "h2_antagonists", "prostaglandins", "heliobacter", "gord_other") ~ "GORD",
+                                    label %in% c("antiobesity") ~ "Anti-Obesity",
+                                    label %in% c("antiepileptics", "antipsychotics", "anxiolytics", "sedatives") ~ "Psycholeptics",
+                                    label %in% c("antidepressants", "psychostimulants", "antidementia") ~ "Psychoanalytics",
+                                    label %in% c("anticholinergics", "dopaminergics", "other_antiparkinson") ~ "Anti-Parkinson",
+                                    
+                                    label %in% c("antifibrinolytics", "vit_k_hemostatics") ~ "Antihemoeehagics",
+                                    label %in% c("pituritary_anterior", "pituritary_posterior", "hyphothalmatics") ~ "Pituritary-Hypothalmatic drugs",
+                                    label %in% c("thyroid", "antithyroid", "iodine") ~ "Thyroid therapy",
+                                    label %in% c("pancreatic_hormones") ~ "Pancreatic hormones",
+                                    label %in% c( "parathyroid", "anti_parathyroid") ~ "Calcium homeostatsis",
+                                    label %in% c("adrenergic_inhalatives", "obstructive_airways_inhalatives", "adrenergic_systemics", "obstructive_airways_systemics") ~ "Obstructive airway disease",
+                                    label %in% c("expectorants", "cough_suppressants", "expectorants_supressants", "cold_other")  ~ "Cold therapy",
+                                    label %in% c("antihistamins") ~ "Anti-histamins",
+                                    label %in% c("respiratory_other") ~ "Other respiratory drugs",
+                                    label %in% c("muscle_relaxans_peripher", "muscle_relaxans_central", "muscle_relaxans_direct") ~ "Muscle relaxants"
+                                    ))
+    
+  } else if (add_target) {
+    df %<>%
+      left_join (.,
+                 target_names %>% dplyr::select(label = target.name, target.location, genatlas, uniprot),
+                 by ="label")
+  
+  }
+
+  return (df)
+}
+
+```
+
+##Gephi Network
+```{r}
+
+my.network.to.gephi <- function(df, add_class=F, add_target=F){
+  edgelist <- my.edges_fast(df)
+  nodes <- my.nodes(df)
+  
+  if(add_class){
+    nodes %<>%
+       mutate(drug_class = case_when(label %in% c("beta_blockers", "calcium_channel_blockers", "antihypertensives", "cardiac_therapy") ~ "Cardiovascular",
+                                    label %in% c("vit_k_antagonists", "heparin", 
+                                               "direct_thrombin_inhibitors","direct_xa_inhibitors",
+                                               "anticoagulants_other") ~ "Anti-coagulants",
+                                    label %in% c("platelet_inhibitors", "aspirin") ~ "Antiplatelets",
+                                    label %in% c("ace_inhibitors","sartans","renin_inhibitors") ~ "RAAS",
+                                    label %in% c ("thiazids","low_ceiling_diuretics","potassium_spare_diuretics",
+                                                "loop_diuretics") ~ "Diuretics", 
+                                    label %in% c("insulins") ~ "Insulins",
+                                    label %in% c("biguanides", "sulfonylureas", "alpha_glucosidase_inhibitors", "thiazolidinediones",
+                                               "dipeptidyl_peptidase4_inhibitors", "glucagon_like_peptide1_analogues",
+                                               "sodium_glucose_co_transporter2_inhibitors", 
+                                               "other_blood_glucose_lowering_drugs") ~ "Anti-hyperglycaemics",
+                                    label %in% c("corticosteroids_systemic", "corticosteroids_inhalative") ~ "Corticosteroids",
+                                    label %in% c( "nsaid", "other_analgesics", "opioids", "migraine_drugs") ~ "Analgesics",
+                                    label %in% c ("antibiotics", "antifungals", "antivirals") ~ "Anti-Infectives",
+                                    label %in% c ("immunosuppressants") ~ "Immunosuppressants",
+                                    label %in% c ("statins") ~ "Statins",
+                                    label %in% c ("immunglobolins") ~ "Immunglobolins",
+                                    label %in% c ("zinc","melatonin", "vit_a","vit_b","vit_c","vit_d") ~ "Supplements",
+                                    label %in% c ("ppis", "h2_antagonists", "prostaglandins", "heliobacter", "gord_other") ~ "GORD",
+                                    label %in% c("antiobesity") ~ "Anti-Obesity",
+                                    label %in% c("antiepileptics", "antipsychotics", "anxiolytics", "sedatives") ~ "Psycholeptics",
+                                    label %in% c("antidepressants", "psychostimulants", "antidementia") ~ "Psychoanalytics",
+                                    label %in% c("anticholinergics", "dopaminergics", "other_antiparkinson") ~ "Anti-Parkinson",
+                                    
+                                    label %in% c("antifibrinolytics", "vit_k_hemostatics") ~ "Antihemoeehagics",
+                                    label %in% c("pituritary_anterior", "pituritary_posterior", "hyphothalmatics") ~ "Pituritary-Hypothalmatic drugs",
+                                    label %in% c("thyroid", "antithyroid", "iodine") ~ "Thyroid therapy",
+                                    label %in% c("pancreatic_hormones") ~ "Pancreatic hormones",
+                                    label %in% c( "parathyroid", "anti_parathyroid") ~ "Calcium homeostatsis",
+                                    label %in% c("adrenergic_inhalatives", "obstructive_airways_inhalatives", "adrenergic_systemics", "obstructive_airways_systemics") ~ "Obstructive airway disease",
+                                    label %in% c("expectorants", "cough_suppressants", "expectorants_supressants", "cold_other")  ~ "Cold therapy",
+                                    label %in% c("antihistamins") ~ "Anti-histamins",
+                                    label %in% c("respiratory_other") ~ "Other respiratory drugs",
+                                    label %in% c("muscle_relaxans_peripher", "muscle_relaxans_central", "muscle_relaxans_direct") ~ "Muscle relaxants"
+                                    ))
+    
+      g <- graph_from_data_frame(edgelist, directed=FALSE, vertices=nodes %>% dplyr::select(label, weight, drug_class))
+ 
+  } else if (add_target) {
+    nodes %<>%
+      left_join (.,
+                 target_names %>% dplyr::select(label = target.name, target.location, genatlas, uniprot),
+                 by ="label")
+    
+      g <- graph_from_data_frame(edgelist, directed=FALSE, vertices=nodes %>% 
+                                   dplyr::select(label, weight, target.location, genatlas, uniprot ))
+    
+  } else {
+
+      g <- graph_from_data_frame(edgelist, directed=FALSE, vertices=nodes %>% dplyr::select(label, weight))
+
+  }
+  
+  gexf2 <- igraph.to.gexf(g)
+  
+  return(gexf2)
+  
+}
+```
+
+
+##Make graph
+```{r}
+my.graph <- function(df){
+  edgelist <- my.edges_fast(df)
+  nodes <- my.nodes(df) 
+  
+  g <- graph_from_data_frame(edgelist, directed=FALSE, vertices=nodes %>% dplyr::select(label, weight))
+  
+  return(g)
+  
+}
+```
+
+
+##My edges
+```{r}
+edge.fun <- function(df){
+  
+  names <- colnames(df %>% select(-severity))
+  
+  a <- sapply(seq_along(names), function(x){
+    d<-data.frame(matrix(nrow = nrow(df), ncol = 0)) 
+    b <- df
+    if (x<length(names)){
+      for (i in x:(length(names)-1)){
+        varname <- paste0(names[[x]],"__",names[[i+1]])
+        c <- b %>% 
+          dplyr::mutate(test = if_else(!!sym(names[[x]])==1 & !!sym(names[[i+1]])==1, 1, 0 )) %>% 
+          dplyr::select(test) %>% 
+          dplyr::rename(!!varname:=test)
+        d<-cbind(d,c)
+        }
+    }
+    return(d)
+  })
+  
+  dt <- data.frame(matrix(nrow = nrow(df), ncol = 0))
+
+  for (i in 1: length(a)){
+    test <- as.data.frame(a[i])
+    dt <- cbind(dt, test)
+    }
+  
+  dt %<>% 
+    select(where(~sum(.) != 0)) 
+
+  severity.vector <- df %>% select(severity)
+  
+  dt <- cbind(dt, severity.vector)
+  
+  return(dt)
+}
+```
+
+# Information study group
+```{r}
+
+options(qwraps2_markup = "markdown")
+
+summtab1 <- as.data.frame (df.pop %>% 
+  mutate(severity = factor (severity, levels = c("non-severe", "severe"), labels = c( "non-severe", "severe"))))
+
+summstat <-list(
+    "Age (years)" =
+      list("Median (Q1,Q3)" = ~ median_iqr(age, na_rm = TRUE)
+      ),
+    "Sex" =
+      list("Female (%)" = ~qwraps2::n_perc(sex == "0")
+      ),
+    "BMI" =
+      list("Median (Q1,Q3)" = ~median_iqr(bmi, na_rm = TRUE, show_n="never")
+           )
+      )
+
+# build summary stat table
+s2 <- summary_table(dplyr::group_by(summtab1, severity), summstat)
+
+mpvals <-
+  sapply(
+         list(chisq.test(summtab1$sex , summtab1$severity)
+              ), function(x) paste(ifelse(x$p.value<0.002, "<",""), ifelse(x$p.value<0.002, 0.002,round(x$p.value, digits=4)))) 
+
+
+s2 <- cbind(s2, "P-value" = "")
+s2[grepl("(%)", rownames(s2)), "P-value"] <- mpvals
+
+a <- capture.output(print(s2))
+
+#Diseases
+summtab2 <- as.data.frame (df.pop %>% 
+  mutate(severity = factor (severity, levels = c("non-severe", "severe"), labels = c( "non-severe", "severe"))) %>% 
+    filter(across(c(-age, -sex,-bmi,-severity), ~!is.na(.x)))
+    )
+
+summstat <-list(
+    "Diseases" = 
+      list("Arterial hypertension (%)" = ~qwraps2::n_perc(aHT== TRUE),
+           "Chronic heart failure (%)" = ~qwraps2::n_perc(chf== TRUE),
+           "Atrial fibrillation* (%)" = ~qwraps2::n_perc(vorhof== TRUE),
+           "Coronary heart disease (%)" = ~qwraps2::n_perc(chd== TRUE),
+           "Coronary sclerosis (%)" = ~qwraps2::n_perc(korskler== TRUE),
+           "Diabetes (%)" = ~qwraps2::n_perc(diabetes == TRUE),
+           "Dementia (%)" = ~qwraps2::n_perc(demenz== TRUE)
+      )
+  )
+
+# build summary stat table
+s3 <- summary_table(dplyr::group_by(summtab2, severity), summstat)
+
+mpvals <-
+  sapply(
+         list(chisq.test(summtab2$aHT , summtab2$severity ),
+              chisq.test(summtab2$chf , summtab2$severity ),
+              chisq.test(summtab2$vorhof , summtab2$severity ),
+              chisq.test(summtab2$chd , summtab2$severity ),
+              chisq.test(summtab2$korskler , summtab2$severity ),
+              chisq.test(summtab2$diabetes , summtab2$severity),
+              chisq.test(summtab2$demenz , summtab2$severity )
+              ), function(x) paste(ifelse(x$p.value<0.002, "<",""), ifelse(x$p.value<0.002, 0.002,round(x$p.value, digits=4)))) 
+
+s3 <- cbind(s3, "P-value" = "")
+s3[grepl("(%)", rownames(s3)), "P-value"] <- mpvals
+
+b <- capture.output(print(s3))
+
+```
+
+##t.test
+```{r}
+t.test(age ~ severity, data = summtab1)
+
+t.test(bmi ~ severity, data = summtab1)
+
+```
+
+#Metrics
+##Dataframes
+```{r}
+
+df.atc.ns <- my.graph(df.meds.atc.severity %>% filter(severity=="non-severe"))
+df.atc.s <- my.graph(df.meds.atc.severity %>% filter(severity=="severe"))
+df.group.ns <- my.graph(df.meds.class.severity %>% filter(severity=="non-severe"))
+df.group.s <- my.graph(df.meds.class.severity %>% filter(severity=="severe"))
+df.subgroup.ns <- my.graph(df.meds.group.severity %>% filter(severity=="non-severe"))
+df.subgroup.s <- my.graph(df.meds.group.severity %>% filter(severity=="severe"))
+df.target.ns <- my.graph(df.targets.severity %>% filter(severity=="non-severe"))
+df.target.s <- my.graph(df.targets.severity %>% filter(severity=="severe"))
+
+```
+
+##Betweeness nodes
+```{r}
+#atc
+a <- as.data.frame(betweenness(df.atc.ns, directed = FALSE))
+b <-  as.data.frame(betweenness(df.atc.s, directed = FALSE))
+
+df <- cbind (a,b)
+
+colnames(df) <- c( "non.severe", "severe")
+
+df <- df %>% 
+  mutate(diff = abs(severe-non.severe))%>% 
+  mutate(across(everything(), ~round(.x,1)))
+
+```
+
+```{r}
+#group
+a <- as.data.frame(betweenness(df.group.ns, directed = FALSE))
+b <- as.data.frame(betweenness(df.group.s, directed = FALSE))
+
+df <- cbind (a,b)
+
+colnames(df) <- c( "non.severe", "severe")
+
+df <- df %>% 
+  mutate(diff = abs(severe-non.severe)) %>% 
+  mutate(across(everything(), ~round(.x,1)))
+```
+
+```{r}
+#subgroup
+a <- as.data.frame(betweenness(df.subgroup.ns, directed = FALSE))
+b <- as.data.frame(betweenness(df.subgroup.s, directed = FALSE))
+
+df <- cbind (a,b)
+
+colnames(df) <- c( "non.severe", "severe")
+
+df <- df %>% 
+  mutate(diff = abs(severe-non.severe))%>% 
+  mutate(across(everything(), ~round(.x,1)))
+```
+
+```{r}
+#target
+a <- as.data.frame(betweenness(df.target.ns, directed = FALSE))
+b <- as.data.frame(betweenness(df.target.s, directed = FALSE))
+
+df <- cbind (a,b)
+
+colnames(df) <- c( "non.severe", "severe")
+
+df <- df %>% 
+  mutate(diff = abs(severe-non.severe))%>% 
+  mutate(across(everything(), ~round(.x,1)))
+```
+
+##Degree
+```{r}
+degree_distribution(df.atc.ns)
+edge_density(df.atc.s)
+edge_density(df.group.ns)
+edge_density(df.group.s)
+edge_density(df.subgroup.ns)
+edge_density(df.subgroup.s)
+edge_density(df.target.ns)
+edge_density(df.target.s)
+
+```
+
+##Diameter
+```{r}
+
+diameter(df.atc.ns)
+diameter(df.atc.s)
+diameter(df.group.ns)
+diameter(df.group.s)
+diameter(df.subgroup.ns)
+diameter(df.subgroup.s)
+diameter(df.target.ns)
+diameter(df.target.s)
+
+get_diameter(df.atc.ns)
+get_diameter(df.atc.s)
+get_diameter(df.group.ns)
+get_diameter(df.group.s)
+get_diameter(df.subgroup.ns)
+get_diameter(df.subgroup.s)
+get_diameter(df.target.ns)
+get_diameter(df.target.s)
+
+```
+
+#ATC Network
+##Gephi
+```{r}
+
+##NON-SEVERE
+topnode.ns <- my.nodes(df.meds.atc.severity %>% 
+                         filter(severity == "non-severe"))
+
+gephi.ns <- my.network.to.gephi(df.meds.atc.severity %>% 
+                         filter(severity == "non-severe"))
+
+# write.gexf(gephi.ns, output="_Graph_Medi_Nonsevere_ATC.gexf", replace=TRUE)
+
+##SEVERE
+topnode.s <- my.nodes(df.meds.atc.severity %>% 
+                         filter(severity == "severe"))
+
+gephi.ns <- my.network.to.gephi(df.meds.atc.severity %>% 
+                         filter(severity == "severe"))
+
+# write.gexf(gephi.ns, output="_Graph_Medi_Severe_ATC.gexf", replace=TRUE)
+
+```
+
+##Chi-Square Nodes
+```{r}
+## prepare df
+topnode.all <- full_join (topnode.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      topnode.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") 
+
+df <- df.meds.atc.severity %>% 
+  dplyr::select(topnode.all$label, severity)
+
+## calculate chi square
+my.p.value <- lapply(df %>% dplyr::select(-severity), function(x) chisq.test(x, df$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+rm(df)
+
+```
+##Chi-Square Edges
+```{r, warning=FALSE}
+
+##CLASS
+#### Edges non-severe
+topedges.ns <- my.edges_fast(df.meds.atc.severity %>% 
+                         filter(severity == "non-severe"))
+
+### Edges severe
+topedges.s <- my.edges_fast(df.meds.atc.severity %>% 
+                         filter(severity == "severe"))
+
+#Edges: severe and non-severe weights
+topedges.all <- full_join (topedges.ns %>% dplyr::select (from,to, weight_nonsevere=weight), 
+                      topedges.s %>% dplyr::select (from, to, weight_severe=weight),
+                      by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df.edges <- edge.fun(df.meds.atc.severity)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to")) %>% 
+  filter(!is.na(p.value))
+
+```
+
+# Network of all medicine taken on admission
+### Gephi
+```{r}
+
+##Groups (=class)
+gephi.ns <- my.network.to.gephi(df.meds.class.severity %>% 
+                         filter(severity == "non-severe"))
+
+# write.gexf(gephi.ns, output="_Graph_Medi_Nonsevere_CLASS.gexf", replace=TRUE)
+
+##subgroups
+gephi.ns <- my.network.to.gephi(df.meds.group.severity %>% 
+                         filter(severity == "non-severe"), add_class = T)
+
+# write.gexf(gephi.ns, output="_Graph_Medi_Nonsevere_GROUP.gexf", replace=TRUE)
+
+```
+
+
+```{r}
+
+##Groups (=class)
+gephi.s <- my.network.to.gephi(df.meds.class.severity %>% 
+                         filter(severity == "severe"))
+
+# write.gexf(gephi.s, output="_Graph_Medi_Severe_CLASS.gexf", replace=TRUE)
+
+##subgroups
+gephi.s <- my.network.to.gephi(df.meds.group.severity %>% 
+                         filter(severity == "severe"), add_class = T)
+
+# write.gexf(gephi.s, output="_Graph_Medi_Severe_GROUP.gexf", replace=TRUE)
+```
+
+###Chi-Square Classes (=Groups)
+```{r, warning=FALSE}
+
+##CLASS
+#### Nodes non-severe
+topnode.ns <- my.nodes(df.meds.class.severity %>% 
+                         filter(severity == "non-severe"))
+
+### Nodes severe
+topnode.s <- my.nodes(df.meds.class.severity %>% 
+                         filter(severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (topnode.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      topnode.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.meds.class.severity %>% 
+  dplyr::select(topnode.all$label, severity)
+
+## calculate chi square
+my.p.value <- lapply(df %>% dplyr::select(-severity), function(x) chisq.test(x, df$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+rm(df)
+```
+
+```{r, warning=F}
+
+##CLASS
+#### Edges non-severe
+
+topedges.ns <- my.edges_fast(df.meds.class.severity %>% 
+                         filter(severity == "non-severe"))
+
+### Edges severe
+topedges.s <- my.edges_fast(df.meds.class.severity %>% 
+                         filter(severity == "severe"))
+
+
+topedges.all <- full_join (topedges.ns %>% dplyr::select (from,to, weight_nonsevere=weight), 
+                      topedges.s %>% dplyr::select (from, to, weight_severe=weight),
+                      by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+# calculate chi square Edges
+df.edges <- edge.fun(df.meds.class.severity)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+###Chi-Squar Groups (=Sub-groups)
+```{r, warning=F}
+
+#Non-severe
+nodes.ns <- my.nodes(df.meds.group.severity %>% 
+                         filter(severity == "non-severe"))
+
+#Severe
+nodes.s <- my.nodes(df.meds.group.severity %>% 
+                         filter(severity == "severe"))
+
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.meds.group.severity %>% 
+  dplyr::select(topnode.all$label, severity)
+
+## calculate chi square
+my.p.value <- lapply(df %>% dplyr::select(-severity), function(x) chisq.test(x, df$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+rm(df)
+```
+
+
+```{r, warning=F}
+
+#### Edges non-severe
+topedges.ns <- my.edges_fast(df.meds.group.severity %>% 
+                         filter(severity == "non-severe"))
+
+### Edges severe
+topedges.s <- my.edges_fast(df.meds.group.severity %>% 
+                         filter(severity == "severe"))
+
+topedges.all <- full_join (topedges.ns %>% dplyr::select (from,to, weight_nonsevere=weight), 
+                      topedges.s %>% dplyr::select (from, to, weight_severe=weight),
+                      by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df.edges <- edge.fun(df.meds.group.severity)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+  
+
+#Network on targets
+##Gephi
+```{r}
+
+df <- df.targets.severity %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1))) %>% #Count to one per patient
+  filter( severity == "non-severe")
+
+gephi.t.ns <- my.network.to.gephi(df, add_target = TRUE)
+
+# write.gexf(gephi.t.ns, output="_Graph_Target_Nonsevere.gexf", replace=TRUE)
+
+```
+
+```{r}
+
+df <- df.targets.severity %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1))) %>% #Count to one per patient
+  filter( severity == "severe")
+
+gephi.t.s <- my.network.to.gephi(df, add_target = TRUE)
+
+# write.gexf(gephi.t.s, output="_Graph_Target_Severe.gexf", replace=TRUE)
+
+```
+
+##Chi-square Nodes
+
+```{r, warning = FALSE, message = FALSE}
+## prepare df
+df <- df.targets.severity %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1))) #Count to one per patient
+
+## calculate chi square
+p.value.target.nodes <- lapply(df %>% dplyr::select( -severity), function(x) chisq.test(x, df$severity)$p.value)
+
+## unlist and rename columns
+p.value.target.nodes <- as.data.frame(unlist(p.value.target.nodes)) %>% 
+  rownames_to_column()
+
+colnames(p.value.target.nodes)<- c("label","p.value")
+
+nodes.t.ns <- my.nodes(df %>%
+                         filter( severity == "non-severe") %>% 
+                         dplyr::select (-severity))
+
+nodes.t.s <- my.nodes(df %>%
+                         filter( severity == "severe") %>% 
+                         dplyr::select (-severity))
+
+#join topnods and p.value df
+topnode.t.all <- full_join (nodes.t.ns %>% 
+                              dplyr::select(label, weight_nonsevere = weight),
+                            nodes.t.s %>% 
+                              dplyr::select(label, weight_severe = weight),
+                            by = "label") %>% 
+  left_join(.,
+            p.value.target.nodes %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+
+```{r, fig.width=12, fig.height=10, warning=F}
+#figure main target nodes
+
+df <- df.targets.severity %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1))) #Count to one per patient
+
+nodes.t.ns <- my.nodes(df %>%
+                         filter( severity == "non-severe") %>% 
+                         dplyr::select (-severity))
+
+
+nodes.t.s <- my.nodes(df %>%
+                         filter( severity == "severe") %>% 
+                         dplyr::select (-severity))
+
+
+df <- full_join (nodes.t.ns %>%
+                              dplyr::select(label, `non-severe` = weight),
+                            nodes.t.s %>%
+                              dplyr::select(label, severe = weight),
+                            by = "label")
+
+
+ids <- df %>% 
+  mutate (importance = `non-severe` + severe) %>% 
+  arrange (desc(importance)) %>% 
+  filter (row_number()<=30) %>% 
+  pivot_longer(., cols = c(`non-severe`, severe)) %>% 
+  mutate(name = as.factor(name),
+         name = fct_relevel(name, "severe", "non-severe"))
+
+ggplot(ids, aes(x=reorder (label, value), group = name))+
+  geom_bar(aes(y = value, fill = name), stat="identity",
+           position = "dodge")+
+  labs (title= "Main target nodes in COVID-19", y="relative frequencies [%]", x="",
+                fill = "Severity") +
+  coord_flip()+
+  scale_fill_npg()
+
+```
+
+```{r, fig.width=12, fig.height=10, warning=F}
+#figure significant target nodes
+
+targets <- topnode.t.all %>% 
+  filter(p.value<0.05)
+
+a <- targets %>% 
+  filter(label %in% ids$label) %>% 
+  arrange(p.value) %>% 
+  dplyr::select(label)
+
+targets <- as.vector(targets$label)
+
+ids <- df %>% 
+  dplyr::filter (label %in% targets) %>% 
+  pivot_longer(., cols = c(`non-severe`, severe)) %>% 
+  mutate(name = as.factor(name),
+         name = fct_relevel(name, "severe", "non-severe"))
+
+ggplot(ids, aes(x=reorder (label, value), group = name))+
+  geom_bar(aes(y = value, fill = name), stat="identity",
+           position = "dodge")+
+  scale_fill_manual(breaks = c("severe", "non-severe"), 
+                       values=c("red", "blue")) + 
+  labs (title= "Targets nodes with significant differences in COVID-19", y="relative frequencies [%]", x="",
+                fill = "Severity") +
+  coord_flip()+
+  scale_fill_npg()
+  
+rm(df)
+
+```
+
+##Chi-square Edges
+```{r, warning=F, eval=F}
+#takes a long time to run
+#### Edges non-severe
+topedges.ns <- my.edges_fast(df.targets.severity %>% 
+                         filter(severity == "non-severe"))
+
+### Edges severe
+topedges.s <- my.edges_fast(df.targets.severity %>% 
+                         filter(severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join (topedges.ns %>% dplyr::select (from,to, weight_nonsevere=weight), 
+                      topedges.s %>% dplyr::select (from, to, weight_severe=weight),
+                      by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.targets.severity %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1)))
+
+#make r compatible names but keep old names in file
+original.names  <- colnames(df)
+colnames(df) <- make.names(colnames(df))
+new.names <-colnames(df)
+df.names <- data.frame(original.names, new.names)
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+#get original names again
+p.value.edge %<>%
+  left_join(.,
+            df.names %>% dplyr::select (from=new.names, from.orig = original.names),
+            by = "from") %>% 
+  left_join(.,
+            df.names %>% dplyr::select (to=new.names, to.orig = original.names),
+            by = "to") %>% 
+  mutate(from = from.orig,
+         to = to.orig) %>% 
+  dplyr::select(from, to, p.value)
+
+edges.t.ns <- my.edges_fast(df.targets.severity %>%
+                              filter( severity == "non-severe"))
+
+edges.t.s <- my.edges_fast(df.targets.severity %>%
+                             filter( severity == "severe"))
+
+# make df with top links severe and non-severe, and join with p.value
+edges.t.all <- full_join (edges.t.ns %>%
+                              dplyr::select(from, to, weight_nonsevere = weight),
+                            edges.t.s %>%
+                              dplyr::select(from, to, weight_severe = weight),
+                            by = c("from", "to")) %>%
+  dplyr::mutate(across(c(-to, -from),~ replace_na(.x,0))) %>%
+  left_join(.,
+            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = c("from", "to")) %>%
+  filter(!is.na(p.value))
+```
+
+
+```{r, fig.width=12, fig.height=10, warning=F}
+#figure main edges
+colnames(edges.t.all) <- c("from", "to", "non-severe", "severe", "p.value")
+
+ids <- edges.t.all %>% 
+  mutate(label = paste(from, to, sep="<- \n ->")) %>% 
+  mutate (importance = `non-severe` + severe) %>% 
+  arrange (desc(importance)) %>% 
+  filter (row_number()<=30) %>% 
+  pivot_longer(., cols = c(`non-severe`, severe))%>% 
+  mutate(name = as.factor(name),
+         name = fct_relevel(name, "severe", "non-severe"))
+
+ggplot(ids, aes(x=reorder (label, value), group = name))+
+  geom_bar(aes(y = value, fill = name), stat="identity",
+           position = "dodge")+
+  scale_fill_manual(breaks = c("severe", "non-severe"), 
+                       values=c("red", "blue")) + 
+  labs (title= "Main edges in COVID-19", y="relative frequencies [%]", x="",
+                fill = "Severity") +
+  coord_flip()+
+  scale_fill_npg()
+
+```
+
+```{r, fig.width=15, fig.height=12, warning=F}
+#figure significant edges
+ids <- edges.t.all %>% 
+  mutate(label = paste(from, to, sep="<-> ")) %>% 
+  filter (p.value<0.001) %>% 
+  pivot_longer(., cols = c(`non-severe`, severe))%>% 
+  mutate(name = as.factor(name),
+         name = fct_relevel(name, "severe", "non-severe"))
+
+ggplot(ids, aes(x=reorder (label, value), group = name))+
+  geom_bar(aes(y = value, fill = name), stat="identity",
+           position = "dodge")+
+  scale_fill_manual(breaks = c("severe", "non-severe"), 
+                       values=c("red", "blue")) + 
+  labs (title= "Target edges with significant differences in COVID-19", y="relative frequencies [%]", x="",
+                fill = "Severity") +
+  coord_flip()+
+  scale_fill_npg()
+
+```
+
+#Comorbidities
+## Heart
+```{r}
+
+##CLASS
+df.heart.class <- df.comorb.class %>% 
+  filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+  dplyr::select(1:30) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%   
+  cbind(., df.comorb.class %>% 
+          filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+          dplyr::select(severity))
+
+##GROUP
+df.heart.group <- df.comorb.group %>% 
+  filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+  dplyr::select(1:86) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>% 
+  cbind(., df.comorb.group %>% 
+          filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+          dplyr::select(severity))
+
+##TARGETS
+df.heart.target<- df.comorb.target %>% 
+  filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+  dplyr::select(1:547) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%
+  cbind(., df.comorb.target %>% 
+          filter(chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) %>% 
+          dplyr::select(severity))
+
+```
+
+###Classes
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.class %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.class %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+# calculate chi square Nodes
+my.p.value <- lapply(df.heart.class %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.class$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+
+edges.ns <- my.edges_fast(df.heart.class %>%  filter (severity == "non-severe"))
+
+### Edges severe
+
+edges.s <- my.edges_fast(df.heart.class %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.class
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+```
+
+###Groups
+####Chi-Square Nodes
+
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.group %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.group %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.heart.group %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.group$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+
+edges.ns <- my.edges_fast(df.heart.group %>%  filter (severity == "non-severe"))
+
+### Edges severe
+
+edges.s <- my.edges_fast(df.heart.group %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.group
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+###Targets
+####Chi-Square Nodes
+
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.target %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.target %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.heart.target %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.target$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F, eval=F}
+#long run time
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.heart.target %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.heart.target %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.target %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1)))
+
+#make r compatible names but keep old names in file
+original.names  <- colnames(df)
+colnames(df) <- make.names(colnames(df))
+new.names <-colnames(df)
+df.names <- data.frame(original.names, new.names)
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+#get original names again
+p.value.edge %<>%
+  left_join(.,
+            df.names %>% dplyr::select (from=new.names, from.orig = original.names),
+            by = "from") %>% 
+  left_join(.,
+            df.names %>% dplyr::select (to=new.names, to.orig = original.names),
+            by = "to") %>% 
+  mutate(from = from.orig,
+         to = to.orig) %>% 
+  dplyr::select(from, to, p.value)
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+## Hypertension
+```{r}
+
+##CLASS
+df.aht.class <- df.comorb.class %>% 
+  filter(aHT == TRUE) %>% 
+  dplyr::select(1:30) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%  ##remove columns with only zeros (as otherwise problem with chi square 
+  cbind(., df.comorb.class %>% 
+          filter(aHT == TRUE) %>% 
+          dplyr::select(severity))
+
+##GROUP
+df.aht.group <- df.comorb.group %>% 
+  filter(aHT == TRUE) %>% 
+  dplyr::select(1:86) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%
+  cbind(., df.comorb.group %>% 
+          filter(aHT == TRUE) %>% 
+          dplyr::select(severity))
+
+##TARGETS
+df.aht.target<- df.comorb.target %>% 
+  filter(aHT == TRUE) %>% 
+  dplyr::select(1:547) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%
+  cbind(., df.comorb.target %>% 
+          filter(aHT == TRUE) %>% 
+          dplyr::select(severity))
+
+```
+
+###Classes
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.aht.class %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.aht.class %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.aht.class %>% dplyr::select(-severity), function(x) chisq.test(x, df.aht.class$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.aht.class %>%  filter (severity == "non-severe"))
+### Edges severe
+
+edges.s <- my.edges_fast(df.aht.class %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.aht.class
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+###Groups
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.aht.group %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.aht.group %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.aht.group %>% dplyr::select(-severity), function(x) chisq.test(x, df.aht.group$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+
+edges.ns <- my.edges_fast(df.aht.group %>%  filter (severity == "non-severe"))
+
+### Edges severe
+
+edges.s <- my.edges_fast(df.aht.group %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.aht.group
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+###Targets
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.aht.target %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.aht.target %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.aht.target %>% dplyr::select(-severity), function(x) chisq.test(x, df.aht.target$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-square Edges
+```{r, warning=F, eval=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.aht.target %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.aht.target %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.aht.target %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1)))
+
+#make r compatible names but keep old names in file
+original.names  <- colnames(df)
+colnames(df) <- make.names(colnames(df))
+new.names <-colnames(df)
+df.names <- data.frame(original.names, new.names)
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+#get original names again
+p.value.edge %<>%
+  left_join(.,
+            df.names %>% dplyr::select (from=new.names, from.orig = original.names),
+            by = "from") %>% 
+  left_join(.,
+            df.names %>% dplyr::select (to=new.names, to.orig = original.names),
+            by = "to") %>% 
+  mutate(from = from.orig,
+         to = to.orig) %>% 
+  dplyr::select(from, to, p.value)
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+## Diabetes
+```{r}
+
+##CLASS
+df.diabetes.class <- df.comorb.class %>% 
+  filter(diabetes == TRUE) %>% 
+  dplyr::select(1:30) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%  ##remove columns with only zeros (as otherwise problem with chi square 
+  cbind(., df.comorb.class %>% 
+          filter(diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+##GROUP
+df.diabetes.group <- df.comorb.group %>% 
+  filter(diabetes == TRUE) %>% 
+  dplyr::select(1:86) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%  ##remove columns with only zeros (as otherwise problem with chi square 
+  cbind(., df.comorb.group %>% 
+          filter(diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+##TARGETS
+df.diabetes.target<- df.comorb.target %>% 
+  filter(diabetes == TRUE) %>% 
+  dplyr::select(1:547) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%  ##remove columns with only zeros (as otherwise problem with chi square 
+  cbind(., df.comorb.target %>% 
+          filter(diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+```
+
+###Classes
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.diabetes.class %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.diabetes.class %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.diabetes.class %>% dplyr::select(-severity), function(x) chisq.test(x, df.diabetes.class$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.diabetes.class %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.diabetes.class %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.diabetes.class
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+###Groups
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.diabetes.group %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.diabetes.group %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.diabetes.group %>% dplyr::select(-severity), function(x) chisq.test(x, df.diabetes.group$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.diabetes.group %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.diabetes.group %>%  filter (severity == "severe"))
+
+#Edges: male da with severe and non-severe weights
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.diabetes.group
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+###Targets
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.diabetes.target %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.diabetes.target %>%  filter (severity == "severe"))
+
+#Nodes make df with severe and non-severe weights
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.diabetes.target %>% dplyr::select(-severity), function(x) chisq.test(x, df.diabetes.target$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F, eval=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.diabetes.target %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.diabetes.target %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.diabetes.target %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1)))
+
+#make r compatible names but keep old names in file
+original.names  <- colnames(df)
+colnames(df) <- make.names(colnames(df))
+new.names <-colnames(df)
+df.names <- data.frame(original.names, new.names)
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+#get original names again
+p.value.edge %<>%
+  left_join(.,
+            df.names %>% dplyr::select (from=new.names, from.orig = original.names),
+            by = "from") %>% 
+  left_join(.,
+            df.names %>% dplyr::select (to=new.names, to.orig = original.names),
+            by = "to") %>% 
+  mutate(from = from.orig,
+         to = to.orig) %>% 
+  dplyr::select(from, to, p.value)
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+## Heart and diabetes
+```{r}
+
+##CLASS
+df.heart.diabetes.class <- df.comorb.class %>% 
+  filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE) %>% 
+  dplyr::select(1:30) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%
+  cbind(., df.comorb.class %>% 
+          filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+##GROUP
+df.heart.diabetes.group <- df.comorb.group %>% 
+  filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE) %>% 
+  dplyr::select(1:86) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%
+  cbind(., df.comorb.group %>% 
+          filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+##TARGETS
+df.heart.diabetes.target<- df.comorb.target %>% 
+  filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE)%>% 
+  dplyr::select(1:547) %>% 
+  dplyr::select(where(~sum(.) != 0)) %>%  
+  cbind(., df.comorb.target %>% 
+          filter((chf == TRUE | chd ==TRUE | korskler==TRUE | vorhof == TRUE) & diabetes == TRUE) %>% 
+          dplyr::select(severity))
+
+```
+
+###Classes
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.diabetes.class %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.diabetes.class %>%  filter (severity == "severe"))
+
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.heart.diabetes.class %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.diabetes.class$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.heart.diabetes.class %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.heart.diabetes.class %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.diabetes.class
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+
+```
+
+###Groups
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.diabetes.group %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.diabetes.group %>%  filter (severity == "severe"))
+
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.heart.diabetes.group %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.diabetes.group$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.heart.diabetes.group %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.heart.diabetes.group %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.diabetes.group
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
+
+
+###Targets
+####Chi-Square Nodes
+```{r, warning=F}
+
+#### Nodes non-severe
+nodes.ns <- my.nodes(df.heart.diabetes.target %>%  filter (severity == "non-severe"))
+
+### Nodes severe
+nodes.s <- my.nodes(df.heart.diabetes.target %>%  filter (severity == "severe"))
+
+topnode.all <- full_join (nodes.ns %>% dplyr::select (label, weight_nonsevere=weight), 
+                      nodes.s %>% dplyr::select (label, weight_severe=weight),
+                      by = "label") %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## calculate chi square
+my.p.value <- lapply(df.heart.diabetes.target %>% dplyr::select(-severity), function(x) chisq.test(x, df.heart.diabetes.target$severity)$p.value)
+
+## unlist and rename columns
+my.p.value <- as.data.frame(unlist(my.p.value)) %>% 
+  rownames_to_column()
+
+colnames(my.p.value)<- c("label","p.value")
+
+#join topnods and p.value df
+topnode.all <- topnode.all %>% 
+  left_join(.,
+            my.p.value %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+            by = "label")
+
+```
+
+####Chi-Square Edges
+```{r, warning=F, eval=F}
+
+#### Edges non-severe
+edges.ns <- my.edges_fast(df.heart.diabetes.target %>%  filter (severity == "non-severe"))
+
+### Edges severe
+edges.s <- my.edges_fast(df.heart.diabetes.target %>%  filter (severity == "severe"))
+
+topedges.all <- full_join ( edges.ns %>% dplyr::select (from,to, weight_nonsevere=weight),
+                            edges.s %>% dplyr::select (from, to, weight_severe=weight),
+                            by = c("from", "to")) %>% 
+  filter(weight_nonsevere != weight_severe)
+
+## prepare df
+df <- df.heart.diabetes.target %>% 
+  mutate(across (c(-severity), ~if_else(.x==0, 0, 1)))
+
+#make r compatible names but keep old names in file
+original.names  <- colnames(df)
+colnames(df) <- make.names(colnames(df))
+new.names <-colnames(df)
+df.names <- data.frame(original.names, new.names)
+
+df.edges <- edge.fun(df)
+
+## calculate chi square, unlist and rename
+p.value.edge <- lapply(df.edges %>% dplyr::select(-severity), function(x) chisq.test(x, df.edges$severity)$p.value)
+
+p.value.edge <- as.data.frame(unlist(p.value.edge)) %>% 
+  rownames_to_column()
+
+colnames(p.value.edge)<- c("from__to","p.value")
+
+##separate the one column with source__target into two separate ones
+p.value.edge %<>% separate(col = "from__to", into = c("from", "to"), sep= "__")
+
+#get original names again
+p.value.edge %<>%
+  left_join(.,
+            df.names %>% dplyr::select (from=new.names, from.orig = original.names),
+            by = "from") %>% 
+  left_join(.,
+            df.names %>% dplyr::select (to=new.names, to.orig = original.names),
+            by = "to") %>% 
+  mutate(from = from.orig,
+         to = to.orig) %>% 
+  dplyr::select(from, to, p.value)
+
+# make df with top links severe and non-severe, and join with p.values
+topedges.all %<>% left_join(.,
+                            p.value.edge %>% mutate(p.value = if_else (p.value>=0.001,as.character(round (p.value, 3)), "<0.001")),
+                            by = c("from", "to"))%>% 
+  filter(!is.na(p.value))
+
+```
